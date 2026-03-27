@@ -33,12 +33,20 @@
 #include "math/Vec3.h"
 
 namespace {
+
+namespace bp = BulletPhysics;
+namespace ext = bp::ballistics::external;
+namespace forces = ext::forces;
+
+using Vec3 = bp::math::Vec3;
+using RigidBody = bp::builtin::bodies::RigidBody;
+
 constexpr double kDt = 1.0 / 60.0;
 constexpr int kTimerMs = 1000 / 60;
 
 inline double gravityScalar()
 {
-    return std::abs(BulletPhysics::constants::GRAVITY.y);
+    return std::abs(bp::constants::GRAVITY.y);
 }
 
 struct Params {
@@ -49,27 +57,52 @@ struct Params {
     double radius = 0.1;
 };
 
-Params gParams;
-std::unique_ptr<BulletPhysics::ballistics::external::PhysicsWorld> gWorld;
-BulletPhysics::builtin::bodies::RigidBody gBody;
-BulletPhysics::math::RK4Integrator gIntegrator;
-std::vector<BulletPhysics::math::Vec3> gTrajectory;
-bool gRunning = true;
+/// Assignment frame: vx, vy in ground plane, vz up (m/s).
+struct AssignmentVelocity {
+    double vx, vy, vz;
+};
 
-BulletPhysics::math::Vec3 mapToRender(const BulletPhysics::math::Vec3& p)
+inline AssignmentVelocity assignmentVelocity(const Params& p)
+{
+    const double a = bp::math::deg2rad(p.alphaDeg);
+    const double ph = bp::math::deg2rad(p.phiDeg);
+    const double ce = std::cos(a) * p.v0;
+    return {ce * std::cos(ph), ce * std::sin(ph), p.v0 * std::sin(a)};
+}
+
+/** Maps library angle convention to assignment-oriented body velocity (x,y_up,z). */
+inline void setRigidBodyVelocityForAssignment(RigidBody& body, const Params& p)
+{
+    body.setVelocityFromAngles(p.v0, p.alphaDeg, p.phiDeg);
+    const Vec3 v = body.getVelocity();
+    body.setVelocity({v.z, v.y, v.x});
+}
+
+struct SimState {
+    Params params{};
+    std::unique_ptr<ext::PhysicsWorld> world;
+    RigidBody body{};
+    bp::math::RK4Integrator integrator{};
+    std::vector<Vec3> trajectory;
+    bool running = true;
+};
+
+SimState gSim;
+
+inline Vec3 mapToRender(const Vec3& p)
 {
     return {p.z, p.y, p.x};
 }
 
+inline void glVertex3(const Vec3& v)
+{
+    glVertex3f(static_cast<GLfloat>(v.x), static_cast<GLfloat>(v.y), static_cast<GLfloat>(v.z));
+}
+
 void printAnalyticalResults(const Params& p)
 {
+    const auto [vx, vy, vz] = assignmentVelocity(p);
     const double g = gravityScalar();
-    const double a = BulletPhysics::math::deg2rad(p.alphaDeg);
-    const double ph = BulletPhysics::math::deg2rad(p.phiDeg);
-
-    const double vx = p.v0 * std::cos(a) * std::cos(ph);
-    const double vy = p.v0 * std::cos(a) * std::sin(ph);
-    const double vz = p.v0 * std::sin(a);
 
     const double tD = (vz + std::sqrt(vz * vz + 2.0 * g * p.z0)) / g;
     const double xmax = vx * tD;
@@ -90,38 +123,28 @@ void printAnalyticalResults(const Params& p)
     std::cout << "==========================\n\n";
 }
 
-void initPhysics(const Params& p)
+void initSimulation(SimState& sim)
 {
-    using namespace BulletPhysics::ballistics::external;
-    using namespace BulletPhysics::ballistics::external::forces;
+    const Params& p = sim.params;
 
-    // PhysicsWorld::applyForces resets context; gravity comes from constants::GRAVITY
-    // (see PhysicsContext::reset). Standard force: Gravity (IForce), not IEnvironment.
-    gWorld = std::make_unique<PhysicsWorld>();
-    gWorld->addForce(std::make_unique<Gravity>());
+    sim.world = std::make_unique<ext::PhysicsWorld>();
+    sim.world->addForce(std::make_unique<forces::Gravity>());
 
-    gBody = BulletPhysics::builtin::bodies::RigidBody{};
-    gBody.setMass(1.0);
+    sim.body = RigidBody{};
+    sim.body.setMass(1.0);
+    sim.body.setPosition({0.0, p.z0, 0.0});
+    setRigidBodyVelocityForAssignment(sim.body, p);
 
-    const double a = BulletPhysics::math::deg2rad(p.alphaDeg);
-    const double ph = BulletPhysics::math::deg2rad(p.phiDeg);
-    const double vx = p.v0 * std::cos(a) * std::cos(ph);
-    const double vy = p.v0 * std::cos(a) * std::sin(ph);
-    const double vz = p.v0 * std::sin(a);
-
-    gBody.setPosition({0.0, p.z0, 0.0});
-    gBody.setVelocity({vx, vz, vy});
-
-    gRunning = true;
-    gTrajectory.clear();
-    gTrajectory.push_back(gBody.getPosition());
+    sim.running = true;
+    sim.trajectory.clear();
+    sim.trajectory.push_back(sim.body.getPosition());
 }
 
-void cleanupPhysics()
+void cleanupSimulation(SimState& sim)
 {
-    if (gWorld) {
-        gWorld->clear();
-        gWorld.reset();
+    if (sim.world) {
+        sim.world->clear();
+        sim.world.reset();
     }
 }
 
@@ -157,26 +180,25 @@ void drawGround(float size = 50.0f, float step = 2.0f)
     glEnd();
 }
 
-void drawTrajectory()
+void drawTrajectory(const SimState& sim)
 {
     glColor3f(1.0f, 1.0f, 0.0f);
     glLineWidth(2.0f);
     glBegin(GL_LINE_STRIP);
-    for (const BulletPhysics::math::Vec3& p : gTrajectory) {
-        const BulletPhysics::math::Vec3 rp = mapToRender(p);
-        glVertex3f(static_cast<GLfloat>(rp.x), static_cast<GLfloat>(rp.y), static_cast<GLfloat>(rp.z));
+    for (const Vec3& p : sim.trajectory) {
+        glVertex3(mapToRender(p));
     }
     glEnd();
     glLineWidth(1.0f);
 }
 
-void drawSphere()
+void drawSphere(const SimState& sim)
 {
-    const BulletPhysics::math::Vec3 rp = mapToRender(gBody.getPosition());
+    const Vec3 rp = mapToRender(sim.body.getPosition());
     glPushMatrix();
     glTranslatef(static_cast<GLfloat>(rp.x), static_cast<GLfloat>(rp.y), static_cast<GLfloat>(rp.z));
     glColor3f(1.0f, 0.3f, 0.3f);
-    glutWireSphere(static_cast<double>(gParams.radius), 18, 18);
+    glutWireSphere(sim.params.radius, 18, 18);
     glPopMatrix();
 }
 
@@ -192,23 +214,22 @@ void display()
 
     drawGround();
     drawAxes();
-    drawTrajectory();
-    drawSphere();
+    drawTrajectory(gSim);
+    drawSphere(gSim);
     glutSwapBuffers();
 }
 
 void timer(int)
 {
-    if (gRunning && gWorld) {
-        gIntegrator.step(gBody, gWorld.get(), kDt);
+    if (gSim.running && gSim.world) {
+        gSim.integrator.step(gSim.body, gSim.world.get(), kDt);
+        gSim.trajectory.push_back(gSim.body.getPosition());
 
-        gTrajectory.push_back(gBody.getPosition());
-
-        const BulletPhysics::math::Vec3 pos = gBody.getPosition();
-        const BulletPhysics::math::Vec3 vel = gBody.getVelocity();
-        if (pos.y <= gParams.radius && vel.y <= 0.0) {
-            gRunning = false;
-            gBody.setVelocity({0.0, 0.0, 0.0});
+        const Vec3 pos = gSim.body.getPosition();
+        const Vec3 vel = gSim.body.getVelocity();
+        if (pos.y <= gSim.params.radius && vel.y <= 0.0) {
+            gSim.running = false;
+            gSim.body.setVelocity({0.0, 0.0, 0.0});
         }
     }
 
@@ -227,14 +248,6 @@ void reshape(int w, int h)
     glLoadIdentity();
     gluPerspective(60.0, static_cast<double>(w) / static_cast<double>(h), 0.1, 500.0);
     glMatrixMode(GL_MODELVIEW);
-}
-
-void keyboard(unsigned char key, int, int)
-{
-    if (key == 27) {
-        cleanupPhysics();
-        std::exit(0);
-    }
 }
 
 bool parseArgs(int argc, char** argv, Params& p)
@@ -277,12 +290,12 @@ bool parseArgs(int argc, char** argv, Params& p)
 
 int main(int argc, char** argv)
 {
-    if (!parseArgs(argc, argv, gParams)) {
+    if (!parseArgs(argc, argv, gSim.params)) {
         return 1;
     }
 
-    printAnalyticalResults(gParams);
-    initPhysics(gParams);
+    printAnalyticalResults(gSim.params);
+    initSimulation(gSim);
 
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
@@ -294,10 +307,9 @@ int main(int argc, char** argv)
 
     glutDisplayFunc(display);
     glutReshapeFunc(reshape);
-    glutKeyboardFunc(keyboard);
     glutTimerFunc(kTimerMs, timer, 0);
 
-    atexit(cleanupPhysics);
+    atexit([] { cleanupSimulation(gSim); });
     glutMainLoop();
     return 0;
 }
