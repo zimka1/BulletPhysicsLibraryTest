@@ -969,12 +969,12 @@ CMakeFiles/projectile_glut_demo.dir/projectile_glut_bullet.cpp.o: \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/OpenGL.framework/Headers/gltypes.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/OpenGL.framework/Headers/glext.h \
   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/OpenGL.framework/Headers/glu.h \
-  /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/ballistics/external/PhysicsWorld.h \
-  /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/ballistics/external/forces/Force.h \
-  /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/PhysicsBody.h \
   /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/Constants.h \
   /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/math/Vec3.h \
   /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/math/Constants.h \
+  /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/ballistics/external/PhysicsWorld.h \
+  /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/ballistics/external/forces/Force.h \
+  /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/PhysicsBody.h \
   /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/ballistics/external/forces/drag/DragModel.h \
   /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/ballistics/external/forces/drag/DragData.h \
   /Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/../../BulletPhysics/src/math/Algorithms.h \

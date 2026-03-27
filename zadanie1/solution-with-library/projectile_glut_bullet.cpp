@@ -1,7 +1,8 @@
 /*
  * Projectile motion: BulletPhysics library + OpenGL/GLUT.
  *
- * Simulation uses the project's PhysicsWorld (gravity + RK4). The library uses
+ * Simulation uses PhysicsWorld with forces::Gravity and PhysicsContext gravity
+ * (constants::GRAVITY) + RK4. The library uses
  * a Y-up world: horizontal (x,z), vertical y. Assignment velocity components
  * (vx, vy horizontal in XY, vz up) map to library velocity as (vx, vz, vy).
  *
@@ -23,8 +24,8 @@
 #include <GL/glut.h>
 #endif
 
+#include "Constants.h"
 #include "ballistics/external/PhysicsWorld.h"
-#include "ballistics/external/environments/Environment.h"
 #include "ballistics/external/forces/Gravity.h"
 #include "builtin/bodies/RigidBody.h"
 #include "math/Angles.h"
@@ -32,9 +33,13 @@
 #include "math/Vec3.h"
 
 namespace {
-constexpr double kGravity = 9.81;
 constexpr double kDt = 1.0 / 60.0;
 constexpr int kTimerMs = 1000 / 60;
+
+inline double gravityScalar()
+{
+    return std::abs(BulletPhysics::constants::GRAVITY.y);
+}
 
 struct Params {
     double z0 = 0.0;
@@ -42,28 +47,6 @@ struct Params {
     double alphaDeg = 0.0;
     double phiDeg = 0.0;
     double radius = 0.1;
-};
-
-/// Sets context.gravity to 9.81 m/s² downward (assignment); runs before forces.
-class ConstantGravityEnv final : public BulletPhysics::ballistics::external::environments::IEnvironment {
-public:
-    explicit ConstantGravityEnv(BulletPhysics::math::Vec3 g) : m_g(g) {}
-
-    void update(BulletPhysics::IPhysicsBody&, BulletPhysics::ballistics::external::PhysicsContext& ctx) override
-    {
-        ctx.gravity = m_g;
-    }
-
-    const std::string& getName() const override
-    {
-        static const std::string name = "ConstantGravity";
-        return name;
-    }
-
-    int getPriority() const override { return -1000; }
-
-private:
-    BulletPhysics::math::Vec3 m_g;
 };
 
 Params gParams;
@@ -80,6 +63,7 @@ BulletPhysics::math::Vec3 mapToRender(const BulletPhysics::math::Vec3& p)
 
 void printAnalyticalResults(const Params& p)
 {
+    const double g = gravityScalar();
     const double a = BulletPhysics::math::deg2rad(p.alphaDeg);
     const double ph = BulletPhysics::math::deg2rad(p.phiDeg);
 
@@ -87,10 +71,10 @@ void printAnalyticalResults(const Params& p)
     const double vy = p.v0 * std::cos(a) * std::sin(ph);
     const double vz = p.v0 * std::sin(a);
 
-    const double tD = (vz + std::sqrt(vz * vz + 2.0 * kGravity * p.z0)) / kGravity;
+    const double tD = (vz + std::sqrt(vz * vz + 2.0 * g * p.z0)) / g;
     const double xmax = vx * tD;
     const double ymax = vy * tD;
-    const double zmax = p.z0 + (vz * vz) / (2.0 * kGravity);
+    const double zmax = p.z0 + (vz * vz) / (2.0 * g);
 
     std::cout << std::fixed << std::setprecision(6);
     std::cout << "=== Analytical results ===\n";
@@ -110,10 +94,10 @@ void initPhysics(const Params& p)
 {
     using namespace BulletPhysics::ballistics::external;
     using namespace BulletPhysics::ballistics::external::forces;
-    using BulletPhysics::math::Vec3;
 
+    // PhysicsWorld::applyForces resets context; gravity comes from constants::GRAVITY
+    // (see PhysicsContext::reset). Standard force: Gravity (IForce), not IEnvironment.
     gWorld = std::make_unique<PhysicsWorld>();
-    gWorld->addEnvironment(std::make_unique<ConstantGravityEnv>(Vec3{0.0, -kGravity, 0.0}));
     gWorld->addForce(std::make_unique<Gravity>());
 
     gBody = BulletPhysics::builtin::bodies::RigidBody{};
