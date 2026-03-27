@@ -1,20 +1,39 @@
+/*
+ * Projectile motion: BulletPhysics library + OpenGL/GLUT.
+ *
+ * Simulation uses the project's PhysicsWorld (gravity + RK4). The library uses
+ * a Y-up world: horizontal (x,z), vertical y. Assignment velocity components
+ * (vx, vy horizontal in XY, vz up) map to library velocity as (vx, vz, vy).
+ *
+ * Render mapping matches the assignment camera transform relative to Z-up
+ * physics: x_cam = z_lib, y_cam = y_lib, z_cam = x_lib.
+ */
+
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <vector>
 
 #ifdef __APPLE__
+#define GL_SILENCE_DEPRECATION 1
 #include <GLUT/glut.h>
 #else
 #include <GL/glut.h>
 #endif
 
-#include <btBulletDynamicsCommon.h>
+#include "ballistics/external/PhysicsWorld.h"
+#include "ballistics/external/environments/Environment.h"
+#include "ballistics/external/forces/Gravity.h"
+#include "builtin/bodies/RigidBody.h"
+#include "math/Angles.h"
+#include "math/Integrator.h"
+#include "math/Vec3.h"
 
 namespace {
 constexpr double kGravity = 9.81;
-constexpr float kDt = 1.0f / 60.0f;
+constexpr double kDt = 1.0 / 60.0;
 constexpr int kTimerMs = 1000 / 60;
 
 struct Params {
@@ -25,40 +44,44 @@ struct Params {
     double radius = 0.1;
 };
 
-struct BulletState {
-    btDefaultCollisionConfiguration* collisionConfig = nullptr;
-    btCollisionDispatcher* dispatcher = nullptr;
-    btBroadphaseInterface* broadphase = nullptr;
-    btSequentialImpulseConstraintSolver* solver = nullptr;
-    btDiscreteDynamicsWorld* world = nullptr;
+/// Sets context.gravity to 9.81 m/s² downward (assignment); runs before forces.
+class ConstantGravityEnv final : public BulletPhysics::ballistics::external::environments::IEnvironment {
+public:
+    explicit ConstantGravityEnv(BulletPhysics::math::Vec3 g) : m_g(g) {}
 
-    btCollisionShape* groundShape = nullptr;
-    btCollisionShape* sphereShape = nullptr;
+    void update(BulletPhysics::IPhysicsBody&, BulletPhysics::ballistics::external::PhysicsContext& ctx) override
+    {
+        ctx.gravity = m_g;
+    }
 
-    btRigidBody* groundBody = nullptr;
-    btRigidBody* sphereBody = nullptr;
+    const std::string& getName() const override
+    {
+        static const std::string name = "ConstantGravity";
+        return name;
+    }
 
-    std::vector<btCollisionShape*> shapes;
-    std::vector<btRigidBody*> bodies;
+    int getPriority() const override { return -1000; }
+
+private:
+    BulletPhysics::math::Vec3 m_g;
 };
 
 Params gParams;
-BulletState gBullet;
-std::vector<btVector3> gTrajectory;
+std::unique_ptr<BulletPhysics::ballistics::external::PhysicsWorld> gWorld;
+BulletPhysics::builtin::bodies::RigidBody gBody;
+BulletPhysics::math::RK4Integrator gIntegrator;
+std::vector<BulletPhysics::math::Vec3> gTrajectory;
 bool gRunning = true;
 
-double degToRad(double deg) {
-    return deg * M_PI / 180.0;
+BulletPhysics::math::Vec3 mapToRender(const BulletPhysics::math::Vec3& p)
+{
+    return {p.z, p.y, p.x};
 }
 
-btVector3 mapToRender(const btVector3& p) {
-    // Bullet: (x, y, z), Render: (y, z, x)
-    return btVector3(p.getY(), p.getZ(), p.getX());
-}
-
-void printAnalyticalResults(const Params& p) {
-    const double a = degToRad(p.alphaDeg);
-    const double ph = degToRad(p.phiDeg);
+void printAnalyticalResults(const Params& p)
+{
+    const double a = BulletPhysics::math::deg2rad(p.alphaDeg);
+    const double ph = BulletPhysics::math::deg2rad(p.phiDeg);
 
     const double vx = p.v0 * std::cos(a) * std::cos(ph);
     const double vy = p.v0 * std::cos(a) * std::sin(ph);
@@ -71,7 +94,7 @@ void printAnalyticalResults(const Params& p) {
 
     std::cout << std::fixed << std::setprecision(6);
     std::cout << "=== Analytical results ===\n";
-    std::cout << "Initial velocity components:\n";
+    std::cout << "Initial velocity components (assignment XY ground, Z up):\n";
     std::cout << "  vx = " << vx << " m/s\n";
     std::cout << "  vy = " << vy << " m/s\n";
     std::cout << "  vz = " << vz << " m/s\n\n";
@@ -83,91 +106,43 @@ void printAnalyticalResults(const Params& p) {
     std::cout << "==========================\n\n";
 }
 
-btRigidBody* createRigidBody(float mass, const btTransform& transform, btCollisionShape* shape) {
-    btVector3 localInertia(0, 0, 0);
-    if (mass > 0.0f) {
-        shape->calculateLocalInertia(mass, localInertia);
-    }
+void initPhysics(const Params& p)
+{
+    using namespace BulletPhysics::ballistics::external;
+    using namespace BulletPhysics::ballistics::external::forces;
+    using BulletPhysics::math::Vec3;
 
-    auto* motionState = new btDefaultMotionState(transform);
-    btRigidBody::btRigidBodyConstructionInfo rbInfo(mass, motionState, shape, localInertia);
-    auto* body = new btRigidBody(rbInfo);
-    gBullet.bodies.push_back(body);
-    return body;
-}
+    gWorld = std::make_unique<PhysicsWorld>();
+    gWorld->addEnvironment(std::make_unique<ConstantGravityEnv>(Vec3{0.0, -kGravity, 0.0}));
+    gWorld->addForce(std::make_unique<Gravity>());
 
-void initPhysics(const Params& p) {
-    gBullet.collisionConfig = new btDefaultCollisionConfiguration();
-    gBullet.dispatcher = new btCollisionDispatcher(gBullet.collisionConfig);
-    gBullet.broadphase = new btDbvtBroadphase();
-    gBullet.solver = new btSequentialImpulseConstraintSolver();
-    gBullet.world = new btDiscreteDynamicsWorld(
-        gBullet.dispatcher, gBullet.broadphase, gBullet.solver, gBullet.collisionConfig);
-    gBullet.world->setGravity(btVector3(0, 0, -kGravity));
+    gBody = BulletPhysics::builtin::bodies::RigidBody{};
+    gBody.setMass(1.0);
 
-    gBullet.groundShape = new btStaticPlaneShape(btVector3(0, 0, 1), 0.0);
-    gBullet.shapes.push_back(gBullet.groundShape);
-    btTransform groundTr;
-    groundTr.setIdentity();
-    groundTr.setOrigin(btVector3(0, 0, 0));
-    gBullet.groundBody = createRigidBody(0.0f, groundTr, gBullet.groundShape);
-    gBullet.world->addRigidBody(gBullet.groundBody);
+    const double a = BulletPhysics::math::deg2rad(p.alphaDeg);
+    const double ph = BulletPhysics::math::deg2rad(p.phiDeg);
+    const double vx = p.v0 * std::cos(a) * std::cos(ph);
+    const double vy = p.v0 * std::cos(a) * std::sin(ph);
+    const double vz = p.v0 * std::sin(a);
 
-    gBullet.sphereShape = new btSphereShape(static_cast<btScalar>(p.radius));
-    gBullet.shapes.push_back(gBullet.sphereShape);
-    btTransform sphereTr;
-    sphereTr.setIdentity();
-    sphereTr.setOrigin(btVector3(0, 0, static_cast<btScalar>(p.z0)));
-    gBullet.sphereBody = createRigidBody(1.0f, sphereTr, gBullet.sphereShape);
-    gBullet.sphereBody->setRestitution(0.0f);
-    gBullet.sphereBody->setFriction(0.5f);
-    gBullet.world->addRigidBody(gBullet.sphereBody);
+    gBody.setPosition({0.0, p.z0, 0.0});
+    gBody.setVelocity({vx, vz, vy});
 
-    const double a = degToRad(p.alphaDeg);
-    const double ph = degToRad(p.phiDeg);
-    const btScalar vx = static_cast<btScalar>(p.v0 * std::cos(a) * std::cos(ph));
-    const btScalar vy = static_cast<btScalar>(p.v0 * std::cos(a) * std::sin(ph));
-    const btScalar vz = static_cast<btScalar>(p.v0 * std::sin(a));
-    gBullet.sphereBody->setLinearVelocity(btVector3(vx, vy, vz));
-    gBullet.sphereBody->activate(true);
-
+    gRunning = true;
     gTrajectory.clear();
-    gTrajectory.push_back(gBullet.sphereBody->getWorldTransform().getOrigin());
+    gTrajectory.push_back(gBody.getPosition());
 }
 
-void cleanupPhysics() {
-    if (!gBullet.world) {
-        return;
+void cleanupPhysics()
+{
+    if (gWorld) {
+        gWorld->clear();
+        gWorld.reset();
     }
-
-    for (btRigidBody* body : gBullet.bodies) {
-        if (body) {
-            gBullet.world->removeRigidBody(body);
-            delete body->getMotionState();
-            delete body;
-        }
-    }
-    gBullet.bodies.clear();
-
-    for (btCollisionShape* shape : gBullet.shapes) {
-        delete shape;
-    }
-    gBullet.shapes.clear();
-
-    delete gBullet.world;
-    delete gBullet.solver;
-    delete gBullet.broadphase;
-    delete gBullet.dispatcher;
-    delete gBullet.collisionConfig;
-
-    gBullet.world = nullptr;
-    gBullet.solver = nullptr;
-    gBullet.broadphase = nullptr;
-    gBullet.dispatcher = nullptr;
-    gBullet.collisionConfig = nullptr;
 }
 
-void drawAxes(float length = 20.0f) {
+void drawAxes(float length = 20.0f)
+{
     glLineWidth(2.0f);
     glBegin(GL_LINES);
     glColor3f(1.0f, 0.0f, 0.0f);
@@ -185,7 +160,8 @@ void drawAxes(float length = 20.0f) {
     glLineWidth(1.0f);
 }
 
-void drawGround(float size = 50.0f, float step = 2.0f) {
+void drawGround(float size = 50.0f, float step = 2.0f)
+{
     glColor3f(0.7f, 0.7f, 0.7f);
     glBegin(GL_LINES);
     for (float i = -size; i <= size; i += step) {
@@ -197,32 +173,31 @@ void drawGround(float size = 50.0f, float step = 2.0f) {
     glEnd();
 }
 
-void drawTrajectory() {
+void drawTrajectory()
+{
     glColor3f(1.0f, 1.0f, 0.0f);
     glLineWidth(2.0f);
     glBegin(GL_LINE_STRIP);
-    for (const btVector3& p : gTrajectory) {
-        const btVector3 rp = mapToRender(p);
-        glVertex3f(rp.getX(), rp.getY(), rp.getZ());
+    for (const BulletPhysics::math::Vec3& p : gTrajectory) {
+        const BulletPhysics::math::Vec3 rp = mapToRender(p);
+        glVertex3f(static_cast<GLfloat>(rp.x), static_cast<GLfloat>(rp.y), static_cast<GLfloat>(rp.z));
     }
     glEnd();
     glLineWidth(1.0f);
 }
 
-void drawSphere() {
-    btTransform tr;
-    gBullet.sphereBody->getMotionState()->getWorldTransform(tr);
-    const btVector3 p = tr.getOrigin();
-    const btVector3 rp = mapToRender(p);
-
+void drawSphere()
+{
+    const BulletPhysics::math::Vec3 rp = mapToRender(gBody.getPosition());
     glPushMatrix();
-    glTranslatef(rp.getX(), rp.getY(), rp.getZ());
+    glTranslatef(static_cast<GLfloat>(rp.x), static_cast<GLfloat>(rp.y), static_cast<GLfloat>(rp.z));
     glColor3f(1.0f, 0.3f, 0.3f);
-    glutWireSphere(gParams.radius, 18, 18);
+    glutWireSphere(static_cast<double>(gParams.radius), 18, 18);
     glPopMatrix();
 }
 
-void display() {
+void display()
+{
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glLoadIdentity();
 
@@ -238,20 +213,18 @@ void display() {
     glutSwapBuffers();
 }
 
-void timer(int) {
-    if (gRunning && gBullet.world && gBullet.sphereBody) {
-        gBullet.world->stepSimulation(kDt, 10, kDt);
+void timer(int)
+{
+    if (gRunning && gWorld) {
+        gIntegrator.step(gBody, gWorld.get(), kDt);
 
-        btTransform tr;
-        gBullet.sphereBody->getMotionState()->getWorldTransform(tr);
-        const btVector3 pos = tr.getOrigin();
-        gTrajectory.push_back(pos);
+        gTrajectory.push_back(gBody.getPosition());
 
-        const btVector3 vel = gBullet.sphereBody->getLinearVelocity();
-        if (pos.getZ() <= static_cast<btScalar>(gParams.radius) && vel.getZ() <= 0.0f) {
+        const BulletPhysics::math::Vec3 pos = gBody.getPosition();
+        const BulletPhysics::math::Vec3 vel = gBody.getVelocity();
+        if (pos.y <= gParams.radius && vel.y <= 0.0) {
             gRunning = false;
-            gBullet.sphereBody->setLinearVelocity(btVector3(0, 0, 0));
-            gBullet.sphereBody->setAngularVelocity(btVector3(0, 0, 0));
+            gBody.setVelocity({0.0, 0.0, 0.0});
         }
     }
 
@@ -259,7 +232,8 @@ void timer(int) {
     glutTimerFunc(kTimerMs, timer, 0);
 }
 
-void reshape(int w, int h) {
+void reshape(int w, int h)
+{
     if (h == 0) {
         h = 1;
     }
@@ -271,14 +245,16 @@ void reshape(int w, int h) {
     glMatrixMode(GL_MODELVIEW);
 }
 
-void keyboard(unsigned char key, int, int) {
+void keyboard(unsigned char key, int, int)
+{
     if (key == 27) {
         cleanupPhysics();
         std::exit(0);
     }
 }
 
-bool parseArgs(int argc, char** argv, Params& p) {
+bool parseArgs(int argc, char** argv, Params& p)
+{
     if (argc != 6) {
         std::cerr << "Usage: " << argv[0] << " <z0> <v0> <alpha_deg> <phi_deg> <r>\n";
         return false;
@@ -315,7 +291,8 @@ bool parseArgs(int argc, char** argv, Params& p) {
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv)
+{
     if (!parseArgs(argc, argv, gParams)) {
         return 1;
     }
@@ -326,7 +303,7 @@ int main(int argc, char** argv) {
     glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
     glutInitWindowSize(1100, 700);
-    glutCreateWindow("3D Projectile Motion (Bullet + OpenGL/GLUT)");
+    glutCreateWindow("3D Projectile (BulletPhysics lib + GLUT)");
 
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
