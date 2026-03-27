@@ -1,0 +1,4 @@
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/build/CMakeFiles/bp_for_demo.dir
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/build/CMakeFiles/projectile_glut_demo.dir
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/build/CMakeFiles/edit_cache.dir
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/build/CMakeFiles/rebuild_cache.dir
