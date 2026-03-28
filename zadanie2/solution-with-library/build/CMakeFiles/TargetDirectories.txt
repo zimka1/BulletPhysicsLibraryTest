@@ -1,0 +1,4 @@
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie2/solution-with-library/build/CMakeFiles/bp_for_zadanie2.dir
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie2/solution-with-library/build/CMakeFiles/projectile_2d.dir
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie2/solution-with-library/build/CMakeFiles/edit_cache.dir
+/Users/zimka/Desktop/Projects/tocha_gey/zadanie2/solution-with-library/build/CMakeFiles/rebuild_cache.dir

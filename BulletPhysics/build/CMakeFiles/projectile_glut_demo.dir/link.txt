@@ -1,0 +1,1 @@
+/usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names -L/opt/homebrew/opt/tcl-tk/lib "CMakeFiles/projectile_glut_demo.dir/Users/zimka/Desktop/Projects/tocha_gey/zadanie1/solution-with-library/projectile_glut_bullet.cpp.o" -o projectile_glut_demo  libBulletPhysics.a -framework OpenGL -framework GLUT
